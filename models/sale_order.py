@@ -21,7 +21,6 @@
 #############################################################################
 from odoo import api, fields, models
 from odoo.tools.safe_eval import datetime
-from odoo.tools.sql import table_exists
 
 
 class SaleOrder(models.Model):
@@ -39,22 +38,6 @@ class SaleOrder(models.Model):
     sub_reference = fields.Char(string="Sub Reference Code", store=True,
                                 compute="_compute_reference_code",
                                 help='Subscription Reference Code')
-
-    def _auto_init(self):
-        res = super()._auto_init()
-        # Clean up stale legacy Enterprise subscription_id references in PostgreSQL sale_order table
-        if table_exists(self.env.cr, 'subscription_package'):
-            with self.env.cr.savepoint():
-                try:
-                    self.env.cr.execute("""
-                        UPDATE sale_order 
-                        SET subscription_id = NULL 
-                        WHERE subscription_id IS NOT NULL 
-                          AND subscription_id NOT IN (SELECT id FROM subscription_package);
-                    """)
-                except Exception:
-                    pass
-        return res
 
     @api.model_create_multi
     def create(self, vals_list):

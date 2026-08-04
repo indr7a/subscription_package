@@ -31,6 +31,26 @@ class SubscriptionPackage(models.Model):
     _rec_name = 'name'
     _inherit = ['mail.thread', 'mail.activity.mixin']
 
+    def init(self):
+        res = super().init()
+        # Clean up stale legacy Enterprise subscription_id references before check_foreign_keys runs
+        with self.env.cr.savepoint():
+            try:
+                self.env.cr.execute("""
+                    UPDATE sale_order 
+                    SET subscription_id = NULL 
+                    WHERE subscription_id IS NOT NULL 
+                      AND subscription_id NOT IN (SELECT id FROM subscription_package);
+
+                    UPDATE account_move 
+                    SET subscription_id = NULL 
+                    WHERE subscription_id IS NOT NULL 
+                      AND subscription_id NOT IN (SELECT id FROM subscription_package);
+                """)
+            except Exception:
+                pass
+        return res
+
     @api.model
     def _read_group_stage_ids(self, categories, domain, order):
         """ Read all the stages and display it in the kanban view,
@@ -142,19 +162,25 @@ class SubscriptionPackage(models.Model):
     def _compute_invoice_count(self):
         """ Calculate Invoice count based on subscription package """
         for rec in self:
-            if rec.exists():
-                count = self.env['account.move'].search_count([('subscription_id', '=', rec.id)])
-                rec.invoice_count = count
-            else:
+            try:
+                if rec.exists():
+                    count = self.env['account.move'].search_count([('subscription_id', '=', rec.id)])
+                    rec.invoice_count = count
+                else:
+                    rec.invoice_count = 0
+            except Exception:
                 rec.invoice_count = 0
 
     @api.depends('sale_order_id')
     def _compute_sale_count(self):
         """ Calculate sale order count based on subscription package """
         for rec in self:
-            if rec.exists():
-                rec.so_count = self.env['sale.order'].search_count([('subscription_id', '=', rec.id)])
-            else:
+            try:
+                if rec.exists():
+                    rec.so_count = self.env['sale.order'].search_count([('subscription_id', '=', rec.id)])
+                else:
+                    rec.so_count = 0
+            except Exception:
                 rec.so_count = 0
 
     @api.depends('stage_id')
