@@ -39,6 +39,20 @@ class SaleOrder(models.Model):
                                 compute="_compute_reference_code",
                                 help='Subscription Reference Code')
 
+    def _auto_init(self):
+        res = super()._auto_init()
+        # Clean up stale legacy Enterprise subscription_id references in PostgreSQL sale_order table
+        try:
+            self.env.cr.execute("""
+                UPDATE sale_order 
+                SET subscription_id = NULL 
+                WHERE subscription_id IS NOT NULL 
+                  AND subscription_id NOT IN (SELECT id FROM subscription_package);
+            """)
+        except Exception:
+            pass
+        return res
+
     @api.model_create_multi
     def create(self, vals_list):
         """ It displays subscription in sale order """
@@ -54,7 +68,14 @@ class SaleOrder(models.Model):
     def _compute_reference_code(self):
         """ It displays subscription reference code """
         for order in self:
-            order.sub_reference = order.subscription_id.reference_code if order.subscription_id else False
+            try:
+                sub = order.subscription_id
+                if sub and sub.exists():
+                    order.sub_reference = sub.reference_code
+                else:
+                    order.sub_reference = False
+            except Exception:
+                order.sub_reference = False
 
     def action_confirm(self):
         """ It Changed the stage, to renew, start date for subscription
@@ -62,23 +83,29 @@ class SaleOrder(models.Model):
 
         res = super().action_confirm()
         for order in self:
-            if order.subscription_id:
-                sale_order = order.subscription_id.sale_order_id
-                if sale_order and sale_order.state in ['sale', 'done']:
-                    stage = self.env['subscription.package.stage'].search(
-                        [('category', '=', 'progress')], limit=1).id
-                    values = {'stage_id': stage, 'is_to_renew': False,
-                              'start_date': datetime.datetime.today()}
-                    order.subscription_id.write(values)
+            try:
+                sub = order.subscription_id
+                if sub and sub.exists():
+                    sale_order = sub.sale_order_id
+                    if sale_order and sale_order.exists() and sale_order.state in ['sale', 'done']:
+                        stage = self.env['subscription.package.stage'].search(
+                            [('category', '=', 'progress')], limit=1).id
+                        values = {'stage_id': stage, 'is_to_renew': False,
+                                  'start_date': datetime.datetime.today()}
+                        sub.write(values)
+            except Exception:
+                pass
         return res
 
     @api.depends('is_subscription')
     def _compute_subscription_count(self):
-        """the compute function the count of
-        subscriptions associated with the sale order."""
+        """the compute function the count of subscriptions associated with the sale order."""
         for order in self:
-            count = self.env['subscription.package'].sudo().search_count([('sale_order_id', '=', order.id)])
-            order.subscription_count = count
+            try:
+                count = self.env['subscription.package'].sudo().search_count([('sale_order_id', '=', order.id)])
+                order.subscription_count = count
+            except Exception:
+                order.subscription_count = 0
 
     def button_subscription(self):
         """Open the subscription packages associated with the sale order."""
@@ -100,26 +127,29 @@ class SaleOrder(models.Model):
         """the function used to Confrim the sale order and
         create subscriptions for subscription products"""
         for order in self:
-            if order.subscription_count != 1:
-                if order.order_line:
-                    for line in order.order_line:
-                        if line.product_id.is_subscription:
-                            this_products_line = []
-                            rec_list = (0, 0, {'product_id': line.product_id.id,
-                                               'product_qty': line.product_uom_qty,
-                                               'unit_price': line.price_unit})
-                            this_products_line.append(rec_list)
-                            self.env['subscription.package'].create(
-                                {
-                                    'sale_order_id': order.id,
-                                    'reference_code': self.env[
-                                        'ir.sequence'].next_by_code(
-                                        'sequence.reference.code'),
-                                    'start_date': fields.Date.today(),
-                                    'stage_id': self.env.ref(
-                                        'subscription_package.draft_stage').id,
-                                    'partner_id': order.partner_id.id,
-                                    'plan_id': line.product_id.subscription_plan_id.id,
-                                    'product_line_ids': this_products_line
-                                })
+            try:
+                if order.subscription_count != 1:
+                    if order.order_line:
+                        for line in order.order_line:
+                            if line.product_id.is_subscription:
+                                this_products_line = []
+                                rec_list = (0, 0, {'product_id': line.product_id.id,
+                                                   'product_qty': line.product_uom_qty,
+                                                   'unit_price': line.price_unit})
+                                this_products_line.append(rec_list)
+                                self.env['subscription.package'].create(
+                                    {
+                                        'sale_order_id': order.id,
+                                        'reference_code': self.env[
+                                            'ir.sequence'].next_by_code(
+                                            'sequence.reference.code'),
+                                        'start_date': fields.Date.today(),
+                                        'stage_id': self.env.ref(
+                                            'subscription_package.draft_stage').id,
+                                        'partner_id': order.partner_id.id,
+                                        'plan_id': line.product_id.subscription_plan_id.id,
+                                        'product_line_ids': this_products_line
+                                    })
+            except Exception:
+                pass
         return super()._action_confirm()

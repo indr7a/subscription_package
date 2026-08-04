@@ -32,6 +32,20 @@ class AccountMove(models.Model):
                                       string='Subscription',
                                       help='Choose subscription package')
 
+    def _auto_init(self):
+        res = super()._auto_init()
+        # Clean up stale legacy Enterprise subscription_id references in PostgreSQL account_move table
+        try:
+            self.env.cr.execute("""
+                UPDATE account_move 
+                SET subscription_id = NULL 
+                WHERE subscription_id IS NOT NULL 
+                  AND subscription_id NOT IN (SELECT id FROM subscription_package);
+            """)
+        except Exception:
+            pass
+        return res
+
     @api.model_create_multi
     def create(self, vals_list):
         """ It displays subscription in account move """
@@ -39,11 +53,13 @@ class AccountMove(models.Model):
             origin = rec.get('invoice_origin')
             if origin:
                 so_id = self.env['sale.order'].search([('name', '=', origin)], limit=1)
-                if so_id and so_id.is_subscription:
-                    if so_id.subscription_id and so_id.subscription_id.next_invoice_date:
-                        so_id.subscription_id.start_date = so_id.subscription_id.next_invoice_date
-                    rec.update({
-                        'is_subscription': True,
-                        'subscription_id': so_id.subscription_id.id if so_id.subscription_id else False
-                    })
+                if so_id and so_id.exists() and so_id.is_subscription:
+                    sub = so_id.subscription_id
+                    if sub and sub.exists():
+                        if sub.next_invoice_date:
+                            sub.start_date = sub.next_invoice_date
+                        rec.update({
+                            'is_subscription': True,
+                            'subscription_id': sub.id
+                        })
         return super().create(vals_list)
