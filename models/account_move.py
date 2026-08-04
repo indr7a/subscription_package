@@ -20,6 +20,7 @@
 #
 #############################################################################
 from odoo import api, fields, models
+from odoo.tools.sql import table_exists
 
 
 class AccountMove(models.Model):
@@ -34,16 +35,18 @@ class AccountMove(models.Model):
 
     def _auto_init(self):
         res = super()._auto_init()
-        # Clean up stale legacy Enterprise subscription_id references in PostgreSQL account_move table
-        try:
-            self.env.cr.execute("""
-                UPDATE account_move 
-                SET subscription_id = NULL 
-                WHERE subscription_id IS NOT NULL 
-                  AND subscription_id NOT IN (SELECT id FROM subscription_package);
-            """)
-        except Exception:
-            pass
+        # Clean up stale legacy Enterprise subscription_id references in PostgreSQL account_move table if subscription_package exists
+        if table_exists(self.env.cr, 'subscription_package'):
+            with self.env.cr.savepoint():
+                try:
+                    self.env.cr.execute("""
+                        UPDATE account_move 
+                        SET subscription_id = NULL 
+                        WHERE subscription_id IS NOT NULL 
+                          AND subscription_id NOT IN (SELECT id FROM subscription_package);
+                    """)
+                except Exception:
+                    pass
         return res
 
     @api.model_create_multi
