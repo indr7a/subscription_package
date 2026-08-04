@@ -53,11 +53,10 @@ class SubscriptionPackageProductLine(models.Model):
                                   related='product_id.uom_id.category_id',
                                   help='Choose Product Uom quantity')
     unit_price = fields.Float(string='Unit Price', store=True, readonly=False,
-                              help='Add Product Unit Price')
+                               help='Add Product Unit Price')
     discount = fields.Float(string="Discount (%)", help='Add Discount')
     tax_ids = fields.Many2many('account.tax', string="Taxes",
-                               ondelete='restrict',
-                               related='product_id.taxes_id', readonly=False,
+                               compute='_compute_tax_ids', store=True, readonly=False,
                                help='Add Taxes')
     price_total = fields.Monetary(store=True, readonly=True,
                                   help='Add Product Price Total')
@@ -70,25 +69,40 @@ class SubscriptionPackageProductLine(models.Model):
                                    help='Add Total Amount',
                                    compute='_compute_total_amount')
     sequence = fields.Integer('Sequence', help="Determine the display order",
-                              index=True)
+                               index=True)
     res_partner_id = fields.Many2one('res.partner', string='Partner',
                                      store=True, help='Choose the  Partner',
                                      related='subscription_id.partner_id')
 
+    @api.depends('product_id', 'company_id', 'subscription_id.company_id')
+    def _compute_tax_ids(self):
+        """Compute taxes_id safely respecting Multi-Company security rules"""
+        for line in self:
+            if line.product_id:
+                target_company = line.company_id or (line.subscription_id and line.subscription_id.company_id) or self.env.company
+                taxes = line.product_id.sudo().taxes_id.filtered(lambda t: not t.company_id or t.company_id == target_company)
+                line.tax_ids = taxes
+            else:
+                line.tax_ids = False
+
     @api.depends('product_qty', 'unit_price', 'discount', 'tax_ids',
                  'currency_id')
     def _compute_total_amount(self):
-        """ Calculate subtotal amount of product line """
+        """ Calculate subtotal amount of product line with Multi-Company Tax safety """
         for line in self:
             price = line.unit_price * (1 - (line.discount or 0.0) / 100.0)
-            taxes = line.tax_ids._origin.compute_all(price,
-                                                     line.subscription_id._origin.currency_id,
-                                                     line.product_qty,
-                                                     product=line.product_id,
-                                                     partner=line.subscription_id._origin.partner_id)
-            line.write({
-                'price_tax': sum(
-                    t.get('amount', 0.0) for t in taxes.get('taxes', [])),
+            target_company = line.company_id or (line.subscription_id and line.subscription_id.company_id) or self.env.company
+            valid_taxes = line.tax_ids.sudo().filtered(lambda t: not t.company_id or t.company_id == target_company)
+            currency = line.subscription_id._origin.currency_id if (line.subscription_id and line.subscription_id._origin) else (line.currency_id or self.env.company.currency_id)
+            partner = line.subscription_id._origin.partner_id if (line.subscription_id and line.subscription_id._origin) else False
+            
+            taxes = valid_taxes.compute_all(price,
+                                            currency,
+                                            line.product_qty,
+                                            product=line.product_id,
+                                            partner=partner)
+            line.update({
+                'price_tax': sum(t.get('amount', 0.0) for t in taxes.get('taxes', [])),
                 'price_total': taxes['total_included'],
                 'total_amount': taxes['total_excluded'],
             })
@@ -102,7 +116,9 @@ class SubscriptionPackageProductLine(models.Model):
     @api.onchange('product_id')
     def _onchange_product_id(self):
         """
-        Set unit_price to the product's list_price when product is selected
+        Set unit_price and tax_ids matching current company when product is selected
         """
         if self.product_id:
             self.unit_price = self.product_id.list_price
+            target_company = self.company_id or (self.subscription_id and self.subscription_id.company_id) or self.env.company
+            self.tax_ids = self.product_id.sudo().taxes_id.filtered(lambda t: not t.company_id or t.company_id == target_company)
