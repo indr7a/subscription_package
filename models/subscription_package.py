@@ -260,8 +260,10 @@ class SubscriptionPackage(models.Model):
             })
 
     def button_sale_order(self):
-        """Button to create sale order"""
+        """Button to create sale order matching the subscription's company_id"""
         self.ensure_one()
+        target_company = self.company_id or self.env.company
+
         this_products_line = []
         for rec in self.product_line_ids:
             rec_list = (0, 0, {'product_id': rec.product_id.id,
@@ -274,7 +276,12 @@ class SubscriptionPackage(models.Model):
         if orders:
             for order in orders:
                 order.action_confirm()
-        so_id = self.env['sale.order'].create({
+
+        so_id = self.env['sale.order'].with_company(target_company).with_context(
+            default_company_id=target_company.id,
+            company_id=target_company.id
+        ).create({
+            'company_id': target_company.id,
             'partner_id': self.partner_id.id,
             'partner_invoice_id': self.partner_id.id,
             'partner_shipping_id': self.partner_id.id,
@@ -290,7 +297,8 @@ class SubscriptionPackage(models.Model):
             'domain': [('id', '=', so_id.id)],
             'view_mode': 'tree,form',
             'context': {
-                "create": False
+                "create": False,
+                "default_company_id": target_company.id
             }
         }
 
@@ -385,9 +393,10 @@ class SubscriptionPackage(models.Model):
                                            'tax_ids': [(6, 0, rec.tax_ids.ids)] if rec.tax_ids else False
                                            })
                         this_products_line.append(rec_list)
-                    self.env['account.move'].create(
+                    self.env['account.move'].with_company(pending_subscription.company_id).create(
                         {
                             'move_type': 'out_invoice',
+                            'company_id': pending_subscription.company_id.id,
                             'invoice_date_due': today_date,
                             'invoice_payment_term_id': False,
                             'invoice_date': today_date,

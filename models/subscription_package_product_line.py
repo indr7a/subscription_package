@@ -40,7 +40,7 @@ class SubscriptionPackageProductLine(models.Model):
                               help='Add Salesperson')
     product_id = fields.Many2one('product.product', string='Product',
                                  store=True, ondelete='restrict',
-                                 domain=[('is_subscription', '=', True)],
+                                 domain="['&', ('is_subscription', '=', True), '|', ('company_id', '=', False), ('company_id', '=', company_id)]",
                                  help='Choose Product')
     product_qty = fields.Float(string='Quantity', store=True, default=1.0,
                                help='Add Product Quantity')
