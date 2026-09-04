@@ -72,12 +72,16 @@ class SaleOrder(models.Model):
             try:
                 sub = order.subscription_id
                 if sub and sub.exists():
-                    sale_order = sub.sale_order_id
+                    sale_order = sub.sale_order_id or order
                     if sale_order and sale_order.exists() and sale_order.state in ['sale', 'done']:
                         stage = self.env['subscription.package.stage'].search(
                             [('category', '=', 'progress')], limit=1).id
-                        values = {'stage_id': stage, 'is_to_renew': False,
-                                  'start_date': datetime.datetime.today()}
+                        values = {
+                            'stage_id': stage,
+                            'is_to_renew': False,
+                            'date_started': fields.Date.today() if not sub.date_started else sub.date_started,
+                            'start_date': fields.Date.today()
+                        }
                         sub.write(values)
             except Exception:
                 pass
@@ -121,21 +125,28 @@ class SaleOrder(models.Model):
                                 this_products_line = []
                                 rec_list = (0, 0, {'product_id': line.product_id.id,
                                                    'product_qty': line.product_uom_qty,
-                                                   'unit_price': line.price_unit})
+                                                   'unit_price': line.price_unit,
+                                                   'tax_ids': [(6, 0, line.tax_id.ids)] if line.tax_id else False})
                                 this_products_line.append(rec_list)
-                                self.env['subscription.package'].create(
+                                sub = self.env['subscription.package'].create(
                                     {
                                         'sale_order_id': order.id,
+                                        'company_id': order.company_id.id,
                                         'reference_code': self.env[
                                             'ir.sequence'].next_by_code(
                                             'sequence.reference.code'),
                                         'start_date': fields.Date.today(),
+                                        'date_started': fields.Date.today(),
                                         'stage_id': self.env.ref(
                                             'subscription_package.draft_stage').id,
                                         'partner_id': order.partner_id.id,
                                         'plan_id': line.product_id.subscription_plan_id.id,
                                         'product_line_ids': this_products_line
                                     })
+                                order.write({
+                                    'subscription_id': sub.id,
+                                    'is_subscription': True,
+                                })
             except Exception:
                 pass
         return super()._action_confirm()

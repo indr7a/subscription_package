@@ -73,6 +73,9 @@
                     <button name="button_sale_order" string="Create Sale Order"
                             type="object" class="btn-primary"
                             invisible="stage_category != 'progress' or so_count > 0"/>
+                    <button name="action_create_invoice" string="Create Invoice"
+                            type="object" class="btn-primary"
+                            invisible="stage_category != 'progress'"/>
                     <button name="button_close" string="Close Subscription"
                             type="object" class="btn-secondary"
                             invisible="stage_category != 'progress'"/>

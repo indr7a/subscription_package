@@ -244,6 +244,79 @@ class SubscriptionPackage(models.Model):
             'target': 'new'
         }
 
+    def _create_subscription_invoice(self, invoice_date=None, due_date=None):
+        """Create invoice for subscription package based on plan configuration"""
+        self.ensure_one()
+        if not self.product_line_ids:
+            return False
+
+        today_date = invoice_date or fields.Date.today()
+        target_company = self.company_id or self.env.company
+        partner = self.partner_invoice_id or self.partner_id
+        if not partner:
+            raise UserError(_("Please configure Customer or Invoice Address for subscription %s") % self.name)
+
+        invoice_lines = []
+        for line in self.product_line_ids:
+            line_vals = {
+                'product_id': line.product_id.id,
+                'name': line.product_id.display_name or line.product_id.name or _('Subscription Item'),
+                'quantity': line.product_qty or 1.0,
+                'price_unit': line.unit_price,
+                'discount': line.discount or 0.0,
+            }
+            if line.tax_ids:
+                line_vals['tax_ids'] = [(6, 0, line.tax_ids.ids)]
+            invoice_lines.append((0, 0, line_vals))
+
+        journal = self.plan_id.journal_id if self.plan_id and self.plan_id.journal_id else False
+        if not journal:
+            journal = self.env['account.journal'].search([
+                ('type', '=', 'sale'),
+                ('company_id', '=', target_company.id)
+            ], limit=1)
+
+        move_vals = {
+            'move_type': 'out_invoice',
+            'company_id': target_company.id,
+            'partner_id': partner.id,
+            'partner_shipping_id': self.partner_shipping_id.id or partner.id,
+            'currency_id': (self.currency_id or target_company.currency_id).id,
+            'invoice_date': today_date,
+            'invoice_date_due': due_date or today_date,
+            'subscription_id': self.id,
+            'invoice_line_ids': invoice_lines,
+        }
+        if journal:
+            move_vals['journal_id'] = journal.id
+
+        move = self.env['account.move'].with_company(target_company).with_context(
+            default_move_type='out_invoice',
+            default_company_id=target_company.id
+        ).create(move_vals)
+
+        if self.plan_id and self.plan_id.invoice_mode == 'done':
+            move.action_post()
+
+        return move
+
+    def action_create_invoice(self):
+        """Action button to create an invoice manually from subscription"""
+        self.ensure_one()
+        move = self._create_subscription_invoice()
+        if not move:
+            raise UserError(_("No products found to invoice."))
+        return {
+            'name': _('Invoices'),
+            'type': 'ir.actions.act_window',
+            'res_model': 'account.move',
+            'view_mode': 'form',
+            'res_id': move.id,
+            'context': {
+                'default_move_type': 'out_invoice',
+            }
+        }
+
     def button_start_date(self):
         """Button to start subscription package"""
         stage_id = self.env['subscription.package.stage'].search([
@@ -258,6 +331,9 @@ class SubscriptionPackage(models.Model):
                 'date_started': fields.Date.today(),
                 'start_date': fields.Date.today()
             })
+            # Generate initial invoice if plan specifies draft_invoice or done and no invoice exists yet
+            if rec.plan_id and rec.plan_id.invoice_mode in ['draft_invoice', 'done'] and rec.invoice_count == 0:
+                rec._create_subscription_invoice(invoice_date=fields.Date.today(), due_date=fields.Date.today())
 
     def button_sale_order(self):
         """Button to create sale order matching the subscription's company_id"""
@@ -382,33 +458,16 @@ class SubscriptionPackage(models.Model):
             renew_date = get_dates['renew_date']
             end_date = get_dates['end_date']
             pending_subscription.close_date = get_dates['close_date']
-            if today_date == pending_subscription.next_invoice_date:
-                if pending_subscription.plan_id and pending_subscription.plan_id.invoice_mode == 'draft_invoice':
-                    this_products_line = []
-                    for rec in pending_subscription.product_line_ids:
-                        rec_list = (0, 0, {'product_id': rec.product_id.id,
-                                           'quantity': rec.product_qty,
-                                           'price_unit': rec.unit_price,
-                                           'discount': rec.discount,
-                                           'tax_ids': [(6, 0, rec.tax_ids.ids)] if rec.tax_ids else False
-                                           })
-                        this_products_line.append(rec_list)
-                    self.env['account.move'].with_company(pending_subscription.company_id).create(
-                        {
-                            'move_type': 'out_invoice',
-                            'company_id': pending_subscription.company_id.id,
-                            'invoice_date_due': today_date,
-                            'invoice_payment_term_id': False,
-                            'invoice_date': today_date,
-                            'state': 'draft',
-                            'subscription_id': pending_subscription.id,
-                            'partner_id': pending_subscription.partner_invoice_id.id,
-                            'currency_id': pending_subscription.partner_invoice_id.currency_id.id if pending_subscription.partner_invoice_id else False,
-                            'invoice_line_ids': this_products_line
-                        })
+            if pending_subscription.next_invoice_date and today_date >= pending_subscription.next_invoice_date:
+                if pending_subscription.plan_id and pending_subscription.plan_id.invoice_mode in ['draft_invoice', 'done']:
+                    pending_subscription._create_subscription_invoice(
+                        invoice_date=today_date,
+                        due_date=today_date
+                    )
                     pending_subscription.write({
                         'is_to_renew': False,
-                        'start_date': pending_subscription.next_invoice_date})
+                        'start_date': pending_subscription.next_invoice_date
+                    })
                     new_date = self.find_renew_date(
                         pending_subscription.next_invoice_date,
                         pending_subscription.date_started,

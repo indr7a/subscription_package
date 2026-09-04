@@ -62,12 +62,13 @@ class SubscriptionPackagePlan(models.Model):
                                  compute='_compute_days_to_end', store=True,
                                  help="Subscription ending date")
     invoice_mode = fields.Selection([('manual', 'Manually'),
-                                     ('draft_invoice', 'Draft')],
+                                     ('draft_invoice', 'Draft'),
+                                     ('done', 'Done / Posted')],
                                     default='draft_invoice',
                                     help='Select the invoice mode for the '
                                          'subscription plan, specifying '
                                          'whether invoices are generated '
-                                         'manually or in draft state.')
+                                         'manually, as draft, or posted directly.')
     journal_id = fields.Many2one('account.journal', string='Journal',
                                  domain="[('type', '=', 'sale')]")
     company_id = fields.Many2one('res.company', string='Company', store=True,
